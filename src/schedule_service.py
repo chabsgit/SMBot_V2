@@ -33,7 +33,7 @@ def run_until_3pm():
             current_hour = current_time.hour
             
             # Check if it's 3 PM or later
-            if current_hour >= 15:
+            if current_hour >= 16:
                 logger.info("Reached 3 PM IST - stopping scheduled task")
                 break
             
