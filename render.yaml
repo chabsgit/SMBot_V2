@@ -1,0 +1,50 @@
+services:
+  # Web Service
+  - type: web
+    name: smbot-v2
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 3 --timeout 120 src.web_service:app
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SMBOT_API_URL
+        value: https://smbot-v2.onrender.com
+      - key: PYTHON_VERSION
+        value: 3.9.16
+      # Add your Fyers credentials here
+      - key: FY_ID
+        sync: false
+      - key: TOTP_KEY
+        sync: false
+      - key: PIN
+        sync: false
+      - key: APP_ID
+        sync: false
+      - key: Secret_ID
+        sync: false
+      - key: REDIRECT_URI
+        value: https://www.google.com
+
+  # Background Worker for scheduled tasks
+  - type: worker
+    name: smbot-worker
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python src/scheduled_tasks.py
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SMBOT_API_URL
+        value: https://smbot-v2.onrender.com
+      - key: PYTHON_VERSION
+        value: 3.9.16
