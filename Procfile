@@ -1,1 +1,1 @@
-web: gunicorn --bind 0.0.0.0:$PORT --workers 3 --timeout 120 src.web_service:app
+web: gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 120 src.schedule_service_standalone:app
