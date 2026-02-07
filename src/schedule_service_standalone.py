@@ -29,7 +29,7 @@ def setup_logger():
         log_file, maxBytes=10*1024*1024, backupCount=5
     )
     
-    # Console handler
+    # Console handler (this will show in Render logs)
     console_handler = logging.StreamHandler()
     
     # Formatter
@@ -42,6 +42,9 @@ def setup_logger():
     # Add handlers
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+    
+    # Set root logger level to ensure messages appear
+    logging.getLogger().setLevel(logging.INFO)
     
     return logger
 
@@ -62,6 +65,15 @@ def format_time(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S IST")
 
 def run_until_3pm():
+
+    flag = GenerateTOTPToken(logger)
+
+    if not flag:
+        logger.error("❌ TOTP generation failed")
+        exit()
+
+    logger.info("TOTP generated")
+
     """Run logging task until 3 PM IST"""
     global running_task
     

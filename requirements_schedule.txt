@@ -1,5 +1,0 @@
-# Minimal requirements for schedule service
-flask>=2.3.0
-gunicorn>=20.1.0
-pytz>=2023.0
-requests>=2.31.0
