@@ -6,7 +6,9 @@ import hashlib
 import time
 from datetime import datetime
 from urllib import parse
+from logger_config import get_logger
 
+logger = get_logger()
 # Client Info (ENTER YOUR OWN INFO HERE!! Data varies from users and app types)
 FY_ID = "FAD11910"  # Your fyers ID
 APP_ID_TYPE = "2"   # Keep default as 2, It denotes web login
@@ -22,7 +24,7 @@ dt1 = datetime.now()
 APP_TYPE = "100"
 APP_ID_colon_Secret_ID = f"{APP_ID}-{APP_TYPE}:{Secret_ID}"
 APP_ID_HASH = hashlib.sha256(APP_ID_colon_Secret_ID.encode('utf-8')).hexdigest()
-print(f"APP_ID_HASH: {APP_ID_HASH}")
+logger.info(f"APP_ID_HASH: {APP_ID_HASH}")
 
 # API endpoints
 BASE_URL = "https://api-t2.fyers.in/vagator/v2"
@@ -154,40 +156,40 @@ def validate_authcode(app_id_hash, auth_code):
         return [ERROR, str(e)]
 
 
-def GenerateTOTPToken(logger):
+def GenerateTOTPToken():
     """Main authentication flow"""
     print("Starting Fyers API authentication...")
     
     # Step 1 - Send login OTP
     send_otp_result = send_login_otp(fy_id=FY_ID, app_id=APP_ID_TYPE)
     if send_otp_result[0] != SUCCESS:
-        logger.error(f"❌ send_login_otp failure - {send_otp_result[1]}")
+        logger.error(f"send_login_otp failure - {send_otp_result[1]}")
         return False
-    logger.info("✅ send_login_otp success")
+    logger.info("send_login_otp success")
 
     # Step 2 - Generate TOTP
     generate_totp_result = generate_totp(secret=TOTP_KEY)
     if generate_totp_result[0] != SUCCESS:
-        logger.error(f"❌ generate_totp failure - {generate_totp_result[1]}")
+        logger.error(f"generate_totp failure - {generate_totp_result[1]}")
         return False
-    logger.info(f"🔑 Generated TOTP: {generate_totp_result[1]}")
+    logger.info(f"Generated TOTP: {generate_totp_result[1]}")
 
     # Step 3 - Verify TOTP
     request_key = send_otp_result[1]
     totp = generate_totp_result[1]
     verify_totp_result = verify_totp(request_key=request_key, totp=totp)
     if verify_totp_result[0] != SUCCESS:
-        logger.error(f"❌ verify_totp failure - {verify_totp_result[1]}")
+        logger.error(f"verify_totp failure - {verify_totp_result[1]}")
         return False
-    logger.info("✅ verify_totp success")
+    logger.info("verify_totp success")
 
     # Step 4 - Verify PIN
     request_key_2 = verify_totp_result[1]
     verify_pin_result = verify_PIN(request_key=request_key_2, pin=PIN)
     if verify_pin_result[0] != SUCCESS:
-        logger.error(f"❌ verify_pin failure - {verify_pin_result[1]}")
+        logger.error(f"verify_pin failure - {verify_pin_result[1]}")
         return False
-    logger.info("✅ verify_pin success")
+    logger.info("verify_pin success")
 
     # Step 5 - Get auth code
     token_result = token(
@@ -198,9 +200,9 @@ def GenerateTOTPToken(logger):
         access_token=verify_pin_result[1]
     )
     if token_result[0] != SUCCESS:
-        logger.error(f"❌ token failure - {token_result[1]}")
+        logger.error(f"token failure - {token_result[1]}")
         return False
-    logger.info("✅ token success")
+    logger.info("token success")
 
     # Step 6 - Validate auth code (FIXED BUG HERE)
     auth_code = token_result[1]
@@ -209,27 +211,27 @@ def GenerateTOTPToken(logger):
         auth_code=auth_code
     )
     if validate_authcode_result[0] != SUCCESS:  # Fixed: was checking token_result
-        logger.error(f"❌ validate_authcode failure - {validate_authcode_result[1]}")
+        logger.error(f"validate_authcode failure - {validate_authcode_result[1]}")
         return False
-    logger.info("✅ validate_authcode success")
+    logger.info("validate_authcode success")
 
     # Save tokens
     appid1 = f"{APP_ID}-{APP_TYPE}"
     token1 = validate_authcode_result[1]
     access_token = f"{appid1}:{token1}"
     
-    logger.info(f"🎉 Final access_token: {access_token}")
+    logger.info(f"Final access_token: {access_token}")
     
     # Save to files
     with open("fyers_appid.txt", 'w') as file:
         file.write(appid1)
-        logger.info('📄 AppId saved -> fyers_appid.txt')
+        logger.info('AppId saved -> fyers_appid.txt')
     
     with open("fyers_token.txt", 'w') as file:
         file.write(token1)
-        logger.info('📄 Token saved -> fyers_token.txt')
+        logger.info('Token saved -> fyers_token.txt')
     
-    logger.info(f"\n⏰ Generated on: {dt1.day:02d}-{dt1.month:02d}-{dt1.year} {dt1.hour:02d}:{dt1.minute:02d}:{dt1.second:02d}")
+    logger.info(f"Generated on: {dt1.day:02d}-{dt1.month:02d}-{dt1.year} {dt1.hour:02d}:{dt1.minute:02d}:{dt1.second:02d}")
     return True
 
 

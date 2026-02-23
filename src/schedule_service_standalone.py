@@ -6,50 +6,12 @@ import logging.handlers
 import os
 from datetime import datetime
 from flask import Flask, request, jsonify
-
-# Standalone logger configuration (no imports)
-def setup_logger():
-    """Setup logger without importing from other modules"""
-    logger = logging.getLogger('SMBot_V2')
-    
-    # Set log level based on environment
-    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-    logger.setLevel(getattr(logging, log_level))
-    
-    # Prevent duplicate handlers
-    if logger.handlers:
-        return logger
-    
-    # Create logs directory if it doesn't exist
-    os.makedirs('logs', exist_ok=True)
-    
-    # File handler with rotation
-    log_file = f'logs/smbot_{datetime.now().strftime("%Y%m%d")}.log'
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=10*1024*1024, backupCount=5
-    )
-    
-    # Console handler (this will show in Render logs)
-    console_handler = logging.StreamHandler()
-    
-    # Formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
-    )
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-    
-    # Add handlers
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    # Set root logger level to ensure messages appear
-    logging.getLogger().setLevel(logging.INFO)
-    
-    return logger
+from logger_config import get_logger
+from MainFile import TradingBot, LiveEngine
 
 app = Flask(__name__)
-logger = setup_logger()
+app.config['ENV'] = 'development'
+logger = get_logger()
 
 # Global variable to control the running task
 running_task = None
@@ -65,43 +27,62 @@ def format_time(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S IST")
 
 def run_until_3pm():
-
-    flag = GenerateTOTPToken(logger)
+    from generate_TOTP_Token import GenerateTOTPToken
+    flag = GenerateTOTPToken()
 
     if not flag:
-        logger.error("❌ TOTP generation failed")
+        logger.error("TOTP generation failed")
         exit()
 
     logger.info("TOTP generated")
 
-    """Run logging task until 3 PM IST"""
-    global running_task
-    
-    logger.info("Starting scheduled task - will run until 3 PM IST")
-    
-    while running_task:
-        try:
-            current_time = ist_time()
-            current_hour = current_time.hour
-            
-            # Check if it's 3 PM or later
-            if current_hour >= 16:
-                logger.info("Reached 3 PM IST - stopping scheduled task")
-                break
-            
-            # Log current timestamp
-            timestamp = format_time(current_time)
-            logger.info(f"Scheduled task running - Current time: {timestamp}")
-            
-            # Wait for 1 minute
-            time.sleep(60)
-            
-        except Exception as e:
-            logger.error(f"Error in scheduled task: {str(e)}")
-            time.sleep(60)
-    
+    bot = TradingBot()
+    app_id = bot.app_id
+    raw_token = bot.access_token
+    if not app_id or not raw_token:
+        raise RuntimeError("app_id or token missing; check fyers_appid.txt / fyers_token.txt")
+
+    # v3 websocket token format: "client_id:access_token". [web:50]
+    ws_access_token = f"{app_id}:{raw_token}"
+    engine = LiveEngine(bot, access_token=ws_access_token)
+    engine.start()
     logger.info("Scheduled task completed")
-    running_task = False
+    # # Start engine in a separate thread to avoid blocking
+    # engine_thread = threading.Thread(target=engine.start)
+    # engine_thread.daemon = True
+    # engine_thread.start()
+    # logger.info("Trading engine started in background thread")
+
+    # """Run logging task until 3 PM IST"""
+    # global running_task
+    
+    # logger.info("Starting scheduled task - will run until 3 PM IST")
+    
+    # while running_task:
+    #     try:
+    #         current_time = ist_time()
+    #         current_hour = current_time.hour
+    #         current_minute = current_time.minute
+
+    #         # Check if it's 3 PM or later
+    #         if current_hour >= 6 and current_minute >= 0:
+    #             logger.info("Reached 3 PM IST - stopping scheduled task")
+    #             engine_thread.stop()
+    #             break
+            
+    #         # Log current timestamp
+    #         timestamp = format_time(current_time)
+    #         logger.info(f"Trading engine running - Current time: {timestamp}")
+            
+    #         # Wait for 1 minute
+    #         time.sleep(60)
+            
+    #     except Exception as e:
+    #         logger.error(f"Error in scheduled task: {str(e)}")
+    #         time.sleep(60)
+    
+    # logger.info("Scheduled task completed")
+    # running_task = False
 
 @app.route('/schedule', methods=['POST'])
 def start_schedule():
@@ -122,10 +103,11 @@ def start_schedule():
     logger.info(f"Schedule endpoint called at: {timestamp}")
     
     # Start the background task
-    running_task = True
-    task_thread = threading.Thread(target=run_until_3pm)
-    task_thread.daemon = True
-    task_thread.start()
+    run_until_3pm()
+    # running_task = True
+    # task_thread = threading.Thread(target=run_until_3pm)
+    # task_thread.daemon = True
+    # task_thread.start()
     
     return jsonify({
         "status": "success",
@@ -150,7 +132,11 @@ def schedule_status():
 @app.route('/schedule/stop', methods=['POST'])
 def stop_schedule():
     """Stop the scheduled task"""
-    global running_task
+    global running_task, task_thread
+    
+    if not task_thread.is_alive():
+        task_thread.stop()
+        running_task = False
     
     if not running_task:
         return jsonify({
@@ -159,6 +145,7 @@ def stop_schedule():
         }), 400
     
     running_task = False
+    
     logger.info("Schedule task stopped manually")
     
     return jsonify({
@@ -169,6 +156,7 @@ def stop_schedule():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    
     return jsonify({
         "status": "healthy",
         "service": "Schedule Service",
@@ -179,4 +167,8 @@ def health_check():
 if __name__ == '__main__':
     logger.info("Starting Schedule Service")
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        app.run(host='0.0.0.0', port=port, debug=False)
+    except KeyboardInterrupt:
+        logger.info("Received interrupt signal - shutting down")
+        logger.info("Service stopped")
