@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from flask import Flask, request, jsonify
 from src.logger_config import get_logger
-from MainFile import TradingBot, LiveEngine
+from src.MainFile import TradingBot, LiveEngine
 
 app = Flask(__name__)
 app.config['ENV'] = 'development'
