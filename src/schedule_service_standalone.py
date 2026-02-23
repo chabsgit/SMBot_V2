@@ -6,7 +6,7 @@ import logging.handlers
 import os
 from datetime import datetime
 from flask import Flask, request, jsonify
-from logger_config import get_logger
+from src.logger_config import get_logger
 from MainFile import TradingBot, LiveEngine
 
 app = Flask(__name__)
