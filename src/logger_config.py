@@ -5,7 +5,7 @@ from datetime import datetime
 
 
 class Logger:
-    """Singleton logger for the application"""
+    """Singleton logger for the application """
     _instance = None
     _logger = None
 
