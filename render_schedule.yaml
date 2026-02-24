@@ -17,4 +17,4 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: PYTHON_VERSION
-        value: 3.9.16
+        value: 3.10.13

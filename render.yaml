@@ -19,7 +19,7 @@ services:
       - key: SMBOT_API_URL
         value: https://smbot-v2.onrender.com
       - key: PYTHON_VERSION
-        value: 3.9.16
+        value: 3.10.13
       # Add your Fyers credentials here
       - key: FY_ID
         sync: false
@@ -47,4 +47,4 @@ services:
       - key: SMBOT_API_URL
         value: https://smbot-v2.onrender.com
       - key: PYTHON_VERSION
-        value: 3.9.16
+        value: 3.10.13
