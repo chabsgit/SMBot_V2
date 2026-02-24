@@ -2,7 +2,7 @@ services:
   # Web Service
   - type: web
     name: smbot-v2
-    env: python
+    env: python@3.10.13
     plan: free
     buildCommand: |
       export PYTHON_VERSION=3.10.13
@@ -41,7 +41,7 @@ services:
   # Background Worker for scheduled tasks
   - type: worker
     name: smbot-worker
-    env: python
+    env: python@3.10.13
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python src/scheduled_tasks.py

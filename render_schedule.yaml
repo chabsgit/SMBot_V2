@@ -2,7 +2,7 @@ services:
   # Schedule Web Service
   - type: web
     name: smbot-schedule
-    env: python
+    env: python@3.10.13
     plan: free
     buildCommand: |
       export PYTHON_VERSION=3.10.13
