@@ -13,6 +13,12 @@ import calendar
 import time
 import threading
 import json
+import sys
+import os
+
+# Add src directory to Python path for Render
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from logger_config import get_logger
 
 warnings.filterwarnings("ignore", category=FutureWarning)

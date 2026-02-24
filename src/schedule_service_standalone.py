@@ -4,10 +4,15 @@ import time
 import logging
 import logging.handlers
 import os
+import sys
 from datetime import datetime
 from flask import Flask, request, jsonify
-from src.logger_config import get_logger
-from src.MainFile import TradingBot, LiveEngine
+
+# Add src directory to Python path for Render
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from logger_config import get_logger
+from MainFile import TradingBot, LiveEngine
 
 app = Flask(__name__)
 app.config['ENV'] = 'development'
