@@ -2,10 +2,10 @@ services:
   # Schedule Web Service
   - type: web
     name: smbot-schedule
-    env: python@3.10.13
+    env: python@3.12.0
     plan: free
     buildCommand: |
-      export PYTHON_VERSION=3.10.13
+      export PYTHON_VERSION=3.12.0
       python --version
       pip install --upgrade pip
       pip install -r requirements.txt
@@ -21,4 +21,4 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: PYTHON_VERSION
-        value: 3.10.13
+        value: 3.12.0

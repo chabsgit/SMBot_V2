@@ -2,10 +2,10 @@ services:
   # Web Service
   - type: web
     name: smbot-v2
-    env: python@3.10.13
+    env: python@3.12.0
     plan: free
     buildCommand: |
-      export PYTHON_VERSION=3.10.13
+      export PYTHON_VERSION=3.12.0
       python --version
       pip install --upgrade pip
       pip install -r requirements.txt
@@ -23,7 +23,7 @@ services:
       - key: SMBOT_API_URL
         value: https://smbot-v2.onrender.com
       - key: PYTHON_VERSION
-        value: 3.10.13
+        value: 3.12.0
       # Add your Fyers credentials here
       - key: FY_ID
         sync: false
@@ -41,7 +41,7 @@ services:
   # Background Worker for scheduled tasks
   - type: worker
     name: smbot-worker
-    env: python@3.10.13
+    env: python@3.12.0
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python src/scheduled_tasks.py
@@ -51,4 +51,4 @@ services:
       - key: SMBOT_API_URL
         value: https://smbot-v2.onrender.com
       - key: PYTHON_VERSION
-        value: 3.10.13
+        value: 3.12.0
