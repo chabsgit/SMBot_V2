@@ -106,7 +106,7 @@ class TradingConfig:
     EMA9_ANGLE_LOOKBACK   = 3
     EMA9_MIN_ANGLE_DEG    = 30.0
 
-    HTF_RULE    = "60T"
+    HTF_RULE    = "60"
     HTF_EMA_LEN = 21
 
     SESSION_START = dtime(9, 20)
