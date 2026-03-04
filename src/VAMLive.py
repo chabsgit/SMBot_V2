@@ -125,7 +125,7 @@ class TradingConfig:
     TRAIL_SMOOTH  = 4
 
     # Higher timeframe trend filter
-    HTF_RULE    = "120T"
+    HTF_RULE    = "120min"
     HTF_EMA_LEN = 5
 
     SESSION_START = dtime(9, 20)
