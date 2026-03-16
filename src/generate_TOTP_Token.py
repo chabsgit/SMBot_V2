@@ -10,13 +10,21 @@ from logger_config import get_logger
 
 logger = get_logger()
 # Client Info (ENTER YOUR OWN INFO HERE!! Data varies from users and app types)
-FY_ID = "FAD11910"  # Your fyers ID
-APP_ID_TYPE = "2"   # Keep default as 2, It denotes web login
-TOTP_KEY = "FRBD7YQKTA6QSTFH276PS6BSIJ2TJR6R"  # TOTP secret
-PIN = "8866"        # User pin for fyers account
-APP_ID = "G0KMDMEH4T"  # App ID from myapi dashboard
-Secret_ID = "91AXVYV32M"
-REDIRECT_URI = "https://www.google.com"  # Redirect url from the app
+# FY_ID = "FAD11910"  # Your fyers ID
+# APP_ID_TYPE = "2"   # Keep default as 2, It denotes web login
+# TOTP_KEY = "FRBD7YQKTA6QSTFH276PS6BSIJ2TJR6R"  # TOTP secret
+# PIN = "8866"        # User pin for fyers account
+# APP_ID = "G0KMDMEH4T"  # App ID from myapi dashboard
+# Secret_ID = "91AXVYV32M"
+# REDIRECT_URI = "https://www.google.com"  # Redirect url from the app
+
+FY_ID = os.environ.get("FY_ID", "FAD11910")
+APP_ID_TYPE = "2"
+TOTP_KEY = os.environ.get("TOTP_KEY", "")
+PIN = os.environ.get("PIN", "")
+APP_ID = os.environ.get("APP_ID", "")
+Secret_ID = os.environ.get("SECRET_ID", "")
+REDIRECT_URI = os.environ.get("REDIRECT_URI", "https://www.google.com")
 
 # Initialize datetime at start
 dt1 = datetime.now()
@@ -236,4 +244,4 @@ def GenerateTOTPToken():
 
 
 # if __name__ == "__main__":
-#     main()
+    main()

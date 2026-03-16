@@ -13,7 +13,18 @@ import time
 import threading
 import json
 
-# --------------------------- LOGGING ---------------------------
+# --------------------------- TIMEZONE ---------------------------
+
+IST = pytz.timezone("Asia/Kolkata")
+
+
+# --------------------------- LOGGING (FORCE IST) ---------------------------
+
+def ist_time(*args):
+    # Make logging.Formatter use IST for %(asctime)s
+    return datetime.now(IST).timetuple()
+
+logging.Formatter.converter = ist_time  # ensure asctime is IST
 
 try:
     from logger_config import get_logger
@@ -21,12 +32,12 @@ try:
 except ImportError:
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - SMBot_V2 - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("SMBot_V2")
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-IST = pytz.timezone("Asia/Kolkata")
 
 
 # --------------------------- EXPIRY HELPERS ---------------------------
@@ -665,6 +676,9 @@ class VAMLiveEngine:
         self.pending_signal: Optional[pd.Series] = None
         self.pending_bar_ts: Optional[datetime] = None
 
+        # ---- new: option LTP cache ----
+        self.option_ltp_cache: dict[str, float] = {}
+
     def _bar_key(self, ts: datetime):
         minute_bucket = (ts.minute // self.timeframe_mins) * self.timeframe_mins
         return ts.replace(second=0, microsecond=0, minute=minute_bucket)
@@ -811,20 +825,39 @@ class VAMLiveEngine:
                 if isinstance(d0, dict):
                     v0 = d0.get("v", {})
                     opt_ltp = v0.get("lp")
+
+            # --- fallback to cached LTP if API lp is None ---
             if opt_ltp is None:
-                logger.warning(f"[VAM CONFIRM] Option LTP None for {opt_symbol}, skip entry.")
+                cached = self.option_ltp_cache.get(opt_symbol)
+                if cached is None:
+                    logger.info(
+                        f"[VAM CONFIRM] No LTP for {opt_symbol} from API or cache, skip entry."
+                    )
+                    self.pending_signal = None
+                    self.pending_bar_ts = None
+                    return
+                else:
+                    opt_ltp = float(cached)
+                    logger.info(
+                        f"[VAM CONFIRM] Using cached LTP {opt_ltp:.2f} for {opt_symbol}."
+                    )
             else:
                 opt_ltp = float(opt_ltp)
+                # store fresh value in cache
+                self.option_ltp_cache[opt_symbol] = opt_ltp
 
-                if self.order_manager.has_position:
-                    if direction != self.order_manager.direction:
-                        logger.info("[VAM LIVE] Opposite signal detected -> flip position.")
-                        self.order_manager.close_position(exit_reason="flip_exit", exit_price=opt_ltp)
+            # --- normal flip / entry logic ---
+            if self.order_manager.has_position:
+                if direction != self.order_manager.direction:
+                    logger.info("[VAM LIVE] Opposite signal detected -> flip position.")
+                    self.order_manager.close_position(
+                        exit_reason="flip_exit", exit_price=opt_ltp
+                    )
 
-                if not self.order_manager.has_position:
-                    ok = self.order_manager.open_position(sig, opt_ltp)
-                    if ok:
-                        logger.info(f"[VAM LIVE] New BO position opened for {opt_symbol}")
+            if not self.order_manager.has_position:
+                ok = self.order_manager.open_position(sig, opt_ltp)
+                if ok:
+                    logger.info(f"[VAM LIVE] New BO position opened for {opt_symbol}")
 
         except Exception as e:
             logger.warning(f"[VAM CONFIRM] Failed to execute pending signal: {e}")
