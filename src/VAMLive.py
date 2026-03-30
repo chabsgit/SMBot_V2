@@ -147,8 +147,9 @@ class TradingConfig:
     TRADE_START   = dtime(9, 30)
     TRADE_END     = dtime(15, 0)
 
-    STOP_LOSS_PCT   = -20.0
-    TAKE_PROFIT_PCT = 60.0
+    # SL/TP — single source of truth, used by both signal engine and order manager
+    STOP_LOSS_PCT   = 20.0   # 20% loss from entry
+    TAKE_PROFIT_PCT = 60.0   # 60% gain from entry
 
     def __init__(self):
         now = datetime.now(IST)
@@ -291,6 +292,10 @@ class VAMLiveBot:
     def __init__(self):
         self.config = TradingConfig()
         self.fyers = self._init_fyers()
+
+        # Signal state — tracks last signal direction to prevent duplicate entries.
+        # Reset to neutral on startup; rebuilt by replaying history before each
+        # live signal check, exactly as the backtest does in its forward loop.
         self.position_size: int = 0
         self.last_trade: Optional[str] = None
 
@@ -413,31 +418,40 @@ class VAMLiveBot:
         return symbol
 
     def _create_signal(self, row: pd.Series, direction: str) -> Dict:
+        """
+        Build signal dict only. Does NOT mutate position_size / last_trade.
+        State is updated explicitly in the signal loop, exactly as in the backtest.
+        """
         und_price  = row["close"]
         opt_symbol = self._pick_itm_option_symbol(underlying_price=und_price, direction=direction)
 
         signal = {
-            "timestamp":    row["timestamp"],
-            "index_symbol": self.config.UNDERLYING_SYMBOL,
-            "index_price":  float(und_price),
-            "direction":    direction,
+            "timestamp":     row["timestamp"],
+            "index_symbol":  self.config.UNDERLYING_SYMBOL,
+            "index_price":   float(und_price),
+            "direction":     direction,
             "option_symbol": opt_symbol,
         }
-
-        if direction == "BUY":
-            self.position_size = 1
-            self.last_trade    = "long"
-        else:
-            self.position_size = -1
-            self.last_trade    = "short"
-
         return signal
 
     # -------- VAM signals on index + HTF filter --------
 
     def generate_vam_signals_live(self, df_index: pd.DataFrame) -> pd.DataFrame:
+        """
+        Signal logic mirrors the backtest exactly:
+          - Reset signal state before each full replay.
+          - Loop from warmup onwards, check trade window + HTF filter.
+          - Update position_size / last_trade explicitly after each signal,
+            NOT inside _create_signal.
+        After replay, self.last_trade and self.position_size correctly reflect
+        the last historical signal direction — used to filter the next live entry.
+        """
         if df_index.empty:
             return pd.DataFrame()
+
+        # ---- Reset signal state before replay (mirrors backtest __init__) ----
+        self.position_size = 0
+        self.last_trade    = None
 
         df_idx  = df_index.copy().reset_index()
         df_vam  = compute_vam_ensemble(df_idx, self.config)
@@ -470,6 +484,7 @@ class VAMLiveBot:
             buy_sig   = bool(row["vam_buy_sig"])
             sell_sig  = bool(row["vam_sell_sig"])
 
+            # Exactly as backtest: no same-direction repeat
             prev_pos_ok_long  = (self.position_size <= 0) and (self.last_trade != "long")
             prev_pos_ok_short = (self.position_size >= 0) and (self.last_trade != "short")
 
@@ -479,12 +494,23 @@ class VAMLiveBot:
                     sig["strategy_type"] = "vam_htf_live"
                     sig["htf_trend"]     = htf_trend
                     signals.append(sig)
+                    # Update state explicitly, same as backtest loop
+                    self.position_size = 1
+                    self.last_trade    = "long"
+
                 elif sell_sig and prev_pos_ok_short and (htf_trend == "down"):
                     sig = self._create_signal(row, "SELL")
                     sig["strategy_type"] = "vam_htf_live"
                     sig["htf_trend"]     = htf_trend
                     signals.append(sig)
+                    # Update state explicitly, same as backtest loop
+                    self.position_size = -1
+                    self.last_trade    = "short"
 
+        logger.info(
+            f"[VAM LIVE] Replay complete — {len(signals)} historical signals. "
+            f"last_trade={self.last_trade}, position_size={self.position_size}"
+        )
         return pd.DataFrame(signals) if signals else pd.DataFrame()
 
 
@@ -493,7 +519,7 @@ class VAMLiveBot:
 class VAMOrderManager:
     """
     Bracket Order manager.
-    - Entry   : type=1 (limit), limitPrice = LTP * 1.005, SL=7%, TP=20% in integer points.
+    - Entry   : type=1 (limit), limitPrice = LTP * 1.005, SL and TP from config.
     - Exit    : exit_order(id=entry_order_id) — cancels all BO legs atomically.
     - Flip    : close existing BO first (confirmed via API response), then open new BO.
     - Persist : state is saved to STATE_FILE (JSON) after every open/close so a restart
@@ -511,38 +537,30 @@ class VAMOrderManager:
         self.entry_price:    Optional[float] = None
         self.qty:            int             = self.config.NIFTY_LOT_SIZE
         self.entry_order_id: Optional[str]   = None
-        self.exit_order_id:  Optional[str]   = None
 
     # ------------------------------------------------------------------ #
     #  STATE PERSISTENCE                                                   #
     # ------------------------------------------------------------------ #
 
     def _save_state(self) -> None:
-        """Write current position state to JSON file atomically."""
         state = {
             "has_position":   self.has_position,
             "option_symbol":  self.option_symbol,
             "direction":      self.direction,
             "entry_price":    self.entry_price,
             "entry_order_id": self.entry_order_id,
-            "exit_order_id":  self.exit_order_id,
             "saved_at":       datetime.now(IST).isoformat(),
         }
         tmp = STATE_FILE + ".tmp"
         try:
             with open(tmp, "w") as f:
                 json.dump(state, f, indent=2)
-            os.replace(tmp, STATE_FILE)   # atomic on all POSIX systems
-            logger.info(f"[VAM OM] State saved to {STATE_FILE}: {state}")
+            os.replace(tmp, STATE_FILE)
+            logger.info(f"[VAM OM] State saved: {state}")
         except Exception as e:
             logger.error(f"[VAM OM] Failed to save state: {e}")
 
     def _load_state_from_file(self) -> bool:
-        """
-        Load state from JSON file.
-        Returns True if a valid open position was found, False otherwise.
-        Discards state saved on a previous trading day to avoid stale restores.
-        """
         if not os.path.exists(STATE_FILE):
             logger.info(f"[VAM OM] No state file found at {STATE_FILE}.")
             return False
@@ -554,10 +572,9 @@ class VAMOrderManager:
             saved_at = datetime.fromisoformat(state.get("saved_at", ""))
             today    = datetime.now(IST).date()
 
-            # Discard if saved on a previous trading day
             if saved_at.date() != today:
                 logger.info(
-                    f"[VAM OM] State file is from {saved_at.date()}, today is {today}. "
+                    f"[VAM OM] State file from {saved_at.date()}, today is {today}. "
                     f"Discarding stale state."
                 )
                 os.remove(STATE_FILE)
@@ -572,12 +589,11 @@ class VAMOrderManager:
             self.direction      = state.get("direction")
             self.entry_price    = state.get("entry_price")
             self.entry_order_id = state.get("entry_order_id")
-            self.exit_order_id  = state.get("exit_order_id")
 
             logger.info(
-                f"[VAM OM] Restored state from file: "
-                f"symbol={self.option_symbol}, direction={self.direction}, "
-                f"entry_price={self.entry_price}, order_id={self.entry_order_id}"
+                f"[VAM OM] Restored from file: symbol={self.option_symbol}, "
+                f"direction={self.direction}, entry_price={self.entry_price}, "
+                f"order_id={self.entry_order_id}"
             )
             return True
 
@@ -586,7 +602,6 @@ class VAMOrderManager:
             return False
 
     def _clear_state_file(self) -> None:
-        """Remove state file after a successful close."""
         try:
             if os.path.exists(STATE_FILE):
                 os.remove(STATE_FILE)
@@ -599,12 +614,8 @@ class VAMOrderManager:
     # ------------------------------------------------------------------ #
 
     def _find_bo_order_id(self, symbol: str) -> Optional[str]:
-        """
-        Scan Fyers orderbook for a filled BUY BO entry matching the symbol.
-        Used as fallback when order_id is missing from the state file.
-        """
         try:
-            ob_resp = self.fyers.orderbook(data={})
+            ob_resp = self.fyers.orderbook()
             if not isinstance(ob_resp, dict) or ob_resp.get("s") != "ok":
                 logger.warning("[VAM OM] Could not fetch orderbook for order_id recovery.")
                 return None
@@ -613,8 +624,8 @@ class VAMOrderManager:
                 if (
                     order.get("symbol")      == symbol
                     and order.get("productType") == "BO"
-                    and order.get("side")        == 1    # buy
-                    and order.get("status")      == 2    # filled
+                    and order.get("side")        == 1
+                    and order.get("status")      == 2
                 ):
                     order_id = order.get("id")
                     logger.info(f"[VAM OM] Recovered order_id from orderbook: {order_id}")
@@ -628,12 +639,8 @@ class VAMOrderManager:
             return None
 
     def _restore_state_from_broker(self) -> bool:
-        """
-        Query Fyers positions API to check for an open BO.
-        Called only when the JSON file is missing, stale, or shows no position.
-        """
         try:
-            pos_resp = self.fyers.positions(data={})
+            pos_resp = self.fyers.positions()   # V3: no data= argument
             logger.info(f"[VAM OM] Live positions on startup: {pos_resp}")
 
             if not isinstance(pos_resp, dict) or pos_resp.get("s") != "ok":
@@ -661,15 +668,13 @@ class VAMOrderManager:
                 self.direction      = direction
                 self.entry_price    = entry_price
                 self.entry_order_id = order_id
-                self.exit_order_id  = None
 
-                # Persist the recovered state immediately
                 self._save_state()
 
                 logger.info(
-                    f"[VAM OM] Restored state from broker: "
-                    f"symbol={symbol}, direction={direction}, "
-                    f"entry_price={entry_price:.2f}, order_id={order_id}"
+                    f"[VAM OM] Restored from broker: symbol={symbol}, "
+                    f"direction={direction}, entry_price={entry_price:.2f}, "
+                    f"order_id={order_id}"
                 )
                 return True
 
@@ -681,12 +686,6 @@ class VAMOrderManager:
             return False
 
     def restore_state_on_startup(self) -> None:
-        """
-        Entry point called once during VAMLiveEngine.__init__().
-        Priority:
-          1. JSON file (fast, no API call needed)
-          2. Fyers positions API (fallback if file is missing/stale)
-        """
         logger.info("[VAM OM] Checking for existing position on startup...")
         restored = self._load_state_from_file()
         if not restored:
@@ -697,18 +696,14 @@ class VAMOrderManager:
     # ------------------------------------------------------------------ #
 
     def _compute_bo_sl_tp_points(self, entry_price: float) -> tuple[float, float]:
-        """7% SL and 20% TP from entry price, rounded to integer points."""
-        sl_points = int(round(entry_price * 0.20))
-        tp_points = int(round(entry_price * 0.60))
+        """
+        SL and TP read from config — single source of truth shared with backtest.
+        """
+        sl_points = int(round(entry_price * self.config.STOP_LOSS_PCT   / 100.0))
+        tp_points = int(round(entry_price * self.config.TAKE_PROFIT_PCT / 100.0))
         return float(sl_points), float(tp_points)
 
     def open_position(self, signal_row: pd.Series, opt_ltp: float) -> bool:
-        """
-        Place a BO limit entry order.
-        limitPrice = LTP + 0.5% buffer to ensure immediate fill.
-        SL and TP are integer points from entry.
-        Saves state to JSON on success.
-        """
         symbol    = signal_row.get("option_symbol")
         direction = signal_row.get("direction", "BUY")
 
@@ -727,11 +722,11 @@ class VAMOrderManager:
         data = {
             "symbol":       symbol,
             "qty":          int(self.qty),
-            "type":         1,               # limit — only valid BO entry type on Fyers
-            "side":         1,               # always buy options
+            "type":         1,
+            "side":         1,
             "productType":  "BO",
-            "limitPrice":   limit_price,     # LTP + 0.5% buffer, 1 decimal place
-            "stopPrice":    0,               # must be 0 for BO
+            "limitPrice":   limit_price,
+            "stopPrice":    0,
             "validity":     "DAY",
             "disclosedQty": 0,
             "offlineOrder": False,
@@ -754,8 +749,7 @@ class VAMOrderManager:
                 self.direction      = direction
                 self.entry_price    = entry_price
                 self.entry_order_id = resp.get("id")
-                self.exit_order_id  = None
-                self._save_state()   # persist immediately after open
+                self._save_state()
                 logger.info(f"[VAM OM] BO placed successfully, order_id={self.entry_order_id}")
                 return True
             else:
@@ -767,11 +761,6 @@ class VAMOrderManager:
             return False
 
     def close_position(self, exit_reason: str, exit_price: Optional[float] = None) -> bool:
-        """
-        Exit open BO using exit_order().
-        Cancels all pending SL/TP legs and squares off atomically.
-        Clears JSON state file on success.
-        """
         if not self.has_position or not self.option_symbol:
             logger.warning("[VAM OM] No open position, close_position() ignored.")
             return False
@@ -791,13 +780,12 @@ class VAMOrderManager:
             logger.info(f"[VAM OM] exit_order response: {resp}")
 
             if isinstance(resp, dict) and resp.get("s") == "ok":
-                self.exit_order_id  = resp.get("id")
                 self.has_position   = False
                 self.option_symbol  = None
                 self.direction      = None
                 self.entry_price    = None
                 self.entry_order_id = None
-                self._clear_state_file()   # remove JSON — position is closed
+                self._clear_state_file()
                 logger.info("[VAM OM] BO exited successfully, state cleared.")
                 return True
             else:
@@ -831,14 +819,13 @@ class VAMLiveEngine:
             f"heartbeat threshold={self.heartbeat_secs}s"
         )
 
-        self.ws:             Optional[data_ws.FyersDataSocket] = None
-        self.order_manager   = VAMOrderManager(self.bot.fyers, self.bot.config)
+        self.ws:           Optional[data_ws.FyersDataSocket] = None
+        self.order_manager = VAMOrderManager(self.bot.fyers, self.bot.config)
 
-        # Restore position state if bot restarted mid-trade
         self.order_manager.restore_state_on_startup()
 
-        self.pending_signal:  Optional[pd.Series]  = None
-        self.pending_bar_ts:  Optional[datetime]   = None
+        self.pending_signal:   Optional[pd.Series] = None
+        self.pending_bar_ts:   Optional[datetime]  = None
         self.option_ltp_cache: dict[str, float]    = {}
 
     def _bar_key(self, ts: datetime) -> datetime:
@@ -935,16 +922,22 @@ class VAMLiveEngine:
 
         logger.info(f"[VAM LIVE] Finalized index bar: {bar}")
 
+        # Keep ~60 days of 1-min bars (375 bars/day × 60 days).
+        # Must match HIST_DAYS so EMA/center initialisation is identical to backtest.
         self.index_candles = (
             pd.concat([self.index_candles, pd.DataFrame([bar])], ignore_index=True)
             .drop_duplicates("timestamp")
             .sort_values("timestamp")
+            .tail(22500)
             .reset_index(drop=True)
         )
 
         df_for_signals = self.index_candles.copy()
         df_for_signals.set_index("timestamp", inplace=True)
 
+        # generate_vam_signals_live resets and replays from scratch each call,
+        # then leaves self.last_trade / self.position_size at the last signal
+        # seen in history — identical behaviour to backtest forward loop.
         signals = self.bot.generate_vam_signals_live(df_for_signals)
         if signals.empty:
             logger.info("[VAM LIVE] No VAM signals on this completed index bar.")
@@ -956,12 +949,14 @@ class VAMLiveEngine:
             else:
                 signals["timestamp"] = signals["timestamp"].dt.tz_convert(IST)
 
-        sig_on_bar = signals[signals["timestamp"] == bar_ts]
+        # Floor to minute precision to guard against tz/microsecond mismatches
+        bar_ts_floor = pd.Timestamp(bar_ts).floor("min")
+        sig_on_bar = signals[signals["timestamp"].dt.floor("min") == bar_ts_floor]
         if sig_on_bar.empty:
             logger.info(f"[VAM LIVE] No VAM signal on completed bar {bar_ts}.")
             return
 
-        last_sig           = sig_on_bar.iloc[-1]
+        last_sig            = sig_on_bar.iloc[-1]
         self.pending_signal = last_sig
         self.pending_bar_ts = bar_ts
 
@@ -976,7 +971,6 @@ class VAMLiveEngine:
         direction  = sig["direction"]
 
         try:
-            # Fetch fresh LTP for the option
             quote_resp = self.bot.fyers.quotes(data={"symbols": opt_symbol})
             opt_ltp    = None
             if isinstance(quote_resp, dict) and quote_resp.get("d"):
@@ -984,7 +978,6 @@ class VAMLiveEngine:
                 if isinstance(d0, dict):
                     opt_ltp = d0.get("v", {}).get("lp")
 
-            # Fallback to cached LTP
             if opt_ltp is None:
                 cached = self.option_ltp_cache.get(opt_symbol)
                 if cached is None:
@@ -1000,7 +993,6 @@ class VAMLiveEngine:
                 opt_ltp = float(opt_ltp)
                 self.option_ltp_cache[opt_symbol] = opt_ltp
 
-            # Flip: close existing BO first, then open new one
             if self.order_manager.has_position:
                 if direction != self.order_manager.direction:
                     logger.info("[VAM LIVE] Opposite signal detected -> flipping position.")
@@ -1016,7 +1008,6 @@ class VAMLiveEngine:
                         self.pending_bar_ts = None
                         return
 
-            # Open new position if flat
             if not self.order_manager.has_position:
                 ok = self.order_manager.open_position(sig, opt_ltp)
                 if ok:
